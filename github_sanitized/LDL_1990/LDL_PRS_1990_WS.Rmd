@@ -51,26 +51,28 @@ getwd()
 Symbolic links
 
 ```{bash, eval=FALSE}
-#ln -s /home/jzz10/gwas/freeze8-imputed/gds gds
-ln -s /home/mok36/imputation_code/freeze9b/discovery/14_make_gds gds
-ln -s /home/jnc35/gwas/imputed/imputed_freeze9/discovery/population_structure/data/samoa-hg38_pcair-round2_pcair.RData ./samoa-hg38_pcair-round2_pcair.RData
-ln -s /home/jnc35/gwas/imputed/imputed_freeze8/LDL_C2-model1/LDL_C2-phenotype.RData
-ln -s /home/jnc35/lipids/wgs/btnl9/ashg2019/phenotypes/phenotypes-analysis-discovery.RData
+# Example symlinks for local environment (edit with your own paths)
+# ln -s /path/to/freeze9b/replication/14_replication_make_gds gds
+# ln -s /path/to/replication_gwas_hg38_PC-AiR_round2_pcair.RData
+# ln -s /path/to/LDLCT3-model1/LDLCT3-phenotype.RData
+# ln -s /path/to/phenotypes-analysis-discovery.RData
 
 ```
 
-#PGS MADE IN SCRIPT
-#SCORING FILES CREATED IN SCRIPT 
-#ASSIGN INDIVIDUAL SCORES IN SCRIPT
+#CREATE PGS IN MASTER FILE
 
-## What percent of PRS variants have MAF = 0 in Samoans?
+# Extract variants from Freeze9 GDS files and create scoring files IN SCRIPTS
+
+# Assign Individual Scores IN SCRIPTS
+
+# What percent of PRS variants have MAF = 0 in Samoans?
 
 ```{r}
 maf.counts <- data.frame(chr = 1:22,
                          n.snp = rep(NA, 22),
                          n.maf0 = rep(0, 22))
 for(i in 1:22){
-  load(paste0("~/PRS/LDL/scoring-files/final.scoring.file.chr", i, ".RData"), verbose=FALSE)
+  load(paste0("~/PRS/LDL_1990/scoring-files/final.scoring.file.chr", i, ".RData"), verbose=FALSE)
   maf.counts$n.snp[i] <- nrow(final.scoring.file)
   maf.counts$n.maf0[i] <- sum(final.scoring.file$maf == 0, na.rm = T) # 2 vars on chr 19 have missing MAF info
 }
@@ -85,14 +87,14 @@ sum(maf.counts$n.maf0)/sum(maf.counts$n.snp)
 
 ## Merge in all chromosomes together
 ```{r}
-load("~/PRS/LDL/prs-samoan-scores/samoa.prs.chr1.RData")
+load("~/PRS/LDL_1990/prs-samoan-scores/samoa.prs.chr1.RData")
 names(samoa.scores)[2] <- "score.chr1"
 
 samoa.scores.all <- samoa.scores 
 
 
 for(chr.i in c(2:22)){
-  load(paste0("~/PRS/LDL/prs-samoan-scores/samoa.prs.chr", chr.i, ".RData"))
+  load(paste0("~/PRS/LDL_1990/prs-samoan-scores/samoa.prs.chr", chr.i, ".RData"))
   names(samoa.scores)[2] <- paste0("score.chr", chr.i)
   samoa.scores.all <- left_join(samoa.scores.all, samoa.scores, by = "ID")
 }
@@ -105,66 +107,62 @@ sd(samoa.scores.all$prs)
 ```
 
 
-
-## Distribution of PRS in Samoans
-```{r}
-#load phenotypes 
-load("/home/jnc35/lipids/wgs/btnl9/ashg2019/phenotypes/phenotypes-analysis-discovery.RData")
-
-ldl.obs <- complete.cases(phenotypes$age.ldl, phenotypes$sex, phenotypes$ldl)
-m.ldl <- lm(ldl ~ age.ldl + age2.ldl + sex + sex_age.ldl + sex_age2.ldl + PC1 + PC2 + PC3, data = phenotypes[ldl.obs,], na.action = na.exclude) 
-phenotypes[ldl.obs, "ldl.res"] <- RankNorm(residuals(m.ldl))
-hist(phenotypes$ldl.res)
-
-#ggplot(data=samoa.scores.all, aes(x=prs)) + 
-#  geom_density() + 
-#  theme_bw()
-```
-
-
 ## Association with LDL
 
 Merge with phenotype data
 
 
 ```{r}
-load("/home/jnc35/gwas/imputed/imputed_freeze8/LDL_C2-model1/LDL_C2-phenotype.RData", verbose=TRUE)
+load("/home/jnc35/gwas/imputed/imputed_freeze9/replication/rep1990/LDLCT3-model1/LDLCT3-phenotype.RData", verbose=TRUE)
 
 head(pData(annot))
 
-pca <- get(load("/home/jnc35/gwas/imputed/imputed_freeze9/discovery/population_structure/data/samoa-hg38_pcair-round2_pcair.RData"))
+pca <- get(load("/home/mok36/analysis_CIDR/final_clean_run/relatedness_PC_setup/data/replication_gwas_hg38_PC-AiR_round2_pcair.RData"))
 pcs <- as.data.frame(pca$vectors)
 pcs$sample.id <- row.names(pcs)
 
 tmp.df <- left_join(samoa.scores.all, pData(annot), by = c("ID" = "sample.id"))
 samoa.prs.df <- left_join(tmp.df, pcs[,c("sample.id", "V1", "V2", "V3")], by = c("ID" = "sample.id"))
 
-samoa.prs.df
+samoa.prs.df= samoa.prs.df[samoa.prs.df$polity == 1, ]
+
+ldl.obs <- complete.cases(samoa.prs.df$age, samoa.prs.df$sex, samoa.prs.df$LDLCT3)
+
+m.ldl <- lm(LDLCT3 ~ age + age2 + sex + sex_age + sex_age2 + V1 + V2 + V3, data = samoa.prs.df[ldl.obs,], na.action = na.exclude) 
+
+samoa.prs.df[ldl.obs, "ldl.res"] <- RankNorm(residuals(m.ldl))
+
+hist(samoa.prs.df$ldl.res)
+
+ggplot(data=samoa.scores.all, aes(x=prs)) + 
+  geom_density() + 
+  theme_bw()
 
 write.table(samoa.prs.df, 
-            file = "~/PRS/individual_prs/ldl_discovery_prs.txt", 
+            file = "~/PRS/individual_prs/ldl_1990_WS_prs.txt", 
             row.names = FALSE,
             quote = FALSE,
             sep = "\t")
+
 
 
 ```
 
 ### Unadjusted model
 ```{r}
-ggplot(data = samoa.prs.df, aes(y=LDL_C2, x=prs)) + 
+ggplot(data = samoa.prs.df, aes(y=LDLCT3, x=prs)) + 
   geom_point(alpha=0.3, color="#004D85") + 
   geom_smooth(color="gray20", se=FALSE) + 
   theme_classic() +
   xlab("Polygenic Risk Score") + 
-  ylab("LDL_C2 (mg/dL)") +
+  ylab("LDLCT3 (mg/dL)") +
   scale_x_continuous(breaks=seq(43,50)) +
   theme(text=element_text (size=32))
 
-ggsave("PRS-LDL_DISCOVERY_scatterplot.png", width=16, height=10, units="in")
+ggsave("PRS-LDL_1990_scatterplot_WS.png", width=16, height=10, units="in")
 
 
-m1 <- lm(LDL_C2 ~ prs, data = samoa.prs.df)
+m1 <- lm(LDLCT3 ~ prs, data = samoa.prs.df)
 summary(m1)
 
 ```
@@ -174,7 +172,7 @@ summary(m1)
 ### Adjust for age, sex, and PCAs
 
 ```{r}
-m2 <- lm(LDL_C2 ~ prs + age + age2 + sex + sex_age + sex_age2 + V1 + V2 + V3, data = samoa.prs.df)
+m2 <- lm(LDLCT3 ~ prs + age + age2 + sex + sex_age + sex_age2 + V1 + V2 + V3, data = samoa.prs.df)
 summary(m2)
 confint(m2)
 
@@ -199,20 +197,6 @@ rsq.partial(objF = m2)$partial.rsq[1]
 
 #rsq.partial(objF = m2.n)$partial.rsq[1]
 ```
-**The Partial R2 for the PRS in Samoans in 10.2%. ** 
-
-Evaluation of PRS in Graham et al 2021:
-
-"For each individual in the testing cohorts, PRS were calculated as the sum of the dosages multiplied by the given weight at each variant."  
-
-"Model fit was assessed using the adjusted R2 of a linear model for LDL-C value at initial assessment adjusted for cholesterol medication (divided by 0.7 to estimate pre-medication levels) with sex, batch, age at initial assessment and PCs 1–4 as covariates (Supplementary Tables 21–23)."  
-
-"Supplementary Table 23: Prediction of LDL-C in MGI individuals based on varying numbers of PCs included in the model
-The polygenic score was normalized within each ancestry group separately"  
-
-"Adjusted R2 values were reported for each cohort and ancestry group, with 95% confidence intervals for the adjusted R2 values calculated using bootstrapping."  
-
-"The PRS developed from the multi-ancestry meta-analysis consistently showed the best or near-best performance in each group tested, with improved or comparable predictions relative to ancestry-matched scores (adjusted R2=0.10–0.16; Fig. 3, Supplementary Table 17, Extended Data Fig. 7)."  
 
 
 #### Bootstrap CI for R2
@@ -224,7 +208,7 @@ boot.r2 <- rep(NA, times=n.boot)
 
 for(i in 1:n.boot){
   boot.df <- samoa.prs.df[sample(1:nrow(samoa.prs.df), nrow(samoa.prs.df), replace=TRUE),]
-  boot.m2 <- lm(LDL_C2 ~ prs + age + age2 + sex + sex_age + sex_age2 + V1 + V2 + V3, data = boot.df)
+  boot.m2 <- lm(LDLCT3 ~ prs + age + age2 + sex + sex_age + sex_age2 + V1 + V2 + V3, data = boot.df)
   boot.r2[i] <- rsq.partial(objF = boot.m2)$partial.rsq[1]
 }
 
@@ -235,15 +219,16 @@ quantile(boot.r2, c(0.025, 0.975)) # 95% bootstrap CI for R2
 
 ```
 
+
 ### Incremental R² - Additional variance explained by PRS
 
 ```{r}
 # Model with covariates only (no PRS)
-m2.base <- lm(LDL_C2 ~ age + age2 + sex + sex_age + sex_age2 + V1 + V2 + V3, 
+m2.base <- lm(LDLCT3 ~ age + age2 + sex + sex_age + sex_age2 + V1 + V2 + V3, 
               data = samoa.prs.df)
 
 # Model with PRS and covariates (already created above as m2)
-# m2 <- lm(LDL_C2 ~ prs + age + age2 + sex + sex_age + sex_age2 + V1 + V2 + V3, 
+# m2 <- lm(LDLCT3 ~ prs + age + age2 + sex + sex_age + sex_age2 + V1 + V2 + V3, 
 #          data = samoa.prs.df)
 
 # Calculate R² for both models
@@ -276,11 +261,11 @@ for(i in 1:n.boot){
   boot.df <- samoa.prs.df[sample(1:nrow(samoa.prs.df), nrow(samoa.prs.df), replace = TRUE),]
   
   # Base model (covariates only)
-  boot.m2.base <- lm(LDL_C2 ~ age + age2 + sex + sex_age + sex_age2 + V1 + V2 + V3, 
+  boot.m2.base <- lm(LDLCT3 ~ age + age2 + sex + sex_age + sex_age2 + V1 + V2 + V3, 
                      data = boot.df)
   
   # Full model (PRS + covariates)
-  boot.m2.full <- lm(LDL_C2 ~ prs + age + age2 + sex + sex_age + sex_age2 + V1 + V2 + V3, 
+  boot.m2.full <- lm(LDLCT3 ~ prs + age + age2 + sex + sex_age + sex_age2 + V1 + V2 + V3, 
                      data = boot.df)
   
   # Calculate incremental R²
@@ -312,12 +297,11 @@ incremental_r2_value <- incremental.r2
 incremental_r2_ci <- boot.ci
 
 # Save to CSV for Excel update script
-# Discovery cohort: Year 2010, Polity NA (maps to WS in incremental_r2.xlsx)
 r2_results <- data.frame(
-  Cohort = "Discovery",
+  Cohort = "1990",
   Trait = "LDL-C",
-  Polity = NA_character_,
-  Year = 2010,
+  Polity = "WS",
+  Year = 1995,
   Partial_R2 = partial_r2_value,
   Partial_R2_LCI = partial_r2_ci[1],
   Partial_R2_UCI = partial_r2_ci[2],
@@ -327,10 +311,11 @@ r2_results <- data.frame(
   stringsAsFactors = FALSE
 )
 
-write.csv(r2_results, file = "LDL_r2_results_discovery.csv", row.names = FALSE)
-cat("\nR2 values saved to: LDL_r2_results_discovery.csv\n")
+write.csv(r2_results, file = "../LDL_r2_results_1990_WS.csv", row.names = FALSE)
+cat("\nR2 values saved to: LDL_r2_results_1990_WS.csv\n")
 print(r2_results)
 ```
+
 
 # Session Information
 

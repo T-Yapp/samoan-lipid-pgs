@@ -51,9 +51,9 @@ getwd()
 Symbolic links
 
 ```{bash, eval=FALSE}
-#ln -s /home/jzz10/gwas/freeze8-imputed/gds gds
-ln -s /home/mok36/imputation_code/freeze9b/discovery/14_make_gds gds
-ln -s /home/jnc35/gwas/imputed/imputed_freeze9/discovery/population_structure/data/samoa-hg38_pcair-round2_pcair.RData ./samoa-hg38_pcair-round2_pcair.RData
+# Example symlinks for local environment (edit with your own paths)
+# ln -s /path/to/freeze9b/discovery/14_make_gds gds
+# ln -s /path/to/imputed_freeze9/discovery/population_structure/data/samoa-hg38_pcair-round2_pcair.RData ./samoa-hg38_pcair-round2_pcair.RData
 ```
 
 Get pgs from online. get pgs for each trait 
