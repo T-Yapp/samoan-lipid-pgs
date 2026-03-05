@@ -1,0 +1,1300 @@
+---
+title: "Graham et al 2021 LDL-C PRS Performance in Samoans"
+author: "Toni-Ann Yapp and Jenna C. Carlson"
+date: "`r format(Sys.time(), '%B %d, %Y, %R')`"
+output: 
+ html_document:
+    toc: true
+    number_sections: true
+    code_folding: show
+editor_options: 
+  chunk_output_type: inline
+---
+
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+require(knitr)
+# Set so that long lines in R will be wrapped:
+opts_chunk$set(tidy.opts=list(width.cutoff=80),tidy=TRUE)
+```
+
+
+Goal: assess the performance of the multi-ancestry polygenic risk score for LDL-C constructed in Graham et al 2021 (https://www.nature.com/articles/s41586-021-04064-3) in the Samoan discovery cohort.
+
+PRS weights from: https://www.pgscatalog.org/score/PGS000889/
+
+This PRS was developed using GWAS from ALL ancestries in the analyses (1,088,526 individuals of the following ancestries: African unspecified, East Asian, European, Hispanic or Latin American, South Asian).
+
+It was developed using pruning and thresholding of GWAS results (r2=0.1, distance=500kb, p=5e-4) and contains 9,009 variants in build hg19, weighted by effect estimates (betas).
+
+
+# Load Libraries
+
+```{r load_libraries,message=FALSE}
+library(tidyverse)
+library(SeqArray)
+library(SeqVarTools)
+library(TopmedPipeline)
+library(Biobase) # annotated data frame
+library(rsq)
+library(RNOmni)
+library(readxl)
+
+```
+
+# Input directory and files 
+
+```{r}
+# Print the working directory
+getwd()
+```
+Symbolic links
+
+```{bash, eval=FALSE}
+#ln -s /home/jzz10/gwas/freeze8-imputed/gds gds
+ln -s /home/mok36/imputation_code/freeze9b/discovery/14_make_gds gds
+ln -s /home/jnc35/gwas/imputed/imputed_freeze9/discovery/population_structure/data/samoa-hg38_pcair-round2_pcair.RData ./samoa-hg38_pcair-round2_pcair.RData
+```
+
+Get pgs from online. get pgs for each trait 
+```{bash, eval=FALSE}
+wget https://ftp.ebi.ac.uk/pub/databases/spot/pgs/scores/PGS002781/ScoringFiles/PGS002781.txt.gz
+```
+
+
+```{bash}
+zcat PGS002781.txt.gz | head -50
+```
+
+
+```{r}
+hdl_prs <- read_table(file = "PGS002781.txt.gz", comment = "#")
+
+# any CHR X? (answer: no)
+table(hdl_prs$chr_name, useNA="always")
+
+
+```
+
+# Liftover PRS variants (hg19 to hg38)
+
+Make BED format file
+
+http://genome.ucsc.edu/FAQ/FAQformat.html#format1
+
+```{r}
+hdl_bed <- hdl_prs %>% mutate(chrom = paste0("chr",chr_name),
+                      chromStart = chr_position - 1,
+                      chromEnd = chr_position)
+head(hdl_bed)
+
+hdl_bed %>% 
+  dplyr::select(chrom, chromStart, chromEnd) %>% 
+  write_delim(., file = "HDL_PRS_for_liftover.txt", delim = " ", col_names = FALSE)
+```
+
+http://genome.ucsc.edu/cgi-bin/hgLiftOver
+Original: Human hg19 
+New: Human hg38
+
+
+```{r}
+deleted= read.table("genome.ucsc.edu_trash_hglft_genome_3e84b_9d2400.err.txt", comment = "#") 
+
+bed_hdl_hg19_new = hdl_bed %>% anti_join(., deleted, by = c("chrom" = "V1", "chromStart" = "V2", "chromEnd"="V3"))
+hdl_bed_inner_join_deleted = hdl_bed %>% inner_join(., deleted, by = c("chrom" = "V1", "chromStart" = "V2", "chromEnd"="V3"))
+
+
+```
+
+#Input deleted SNP
+
+```{r}
+hdl_prs_hg38 <- read_table("hglft_genome_3400a_9cd990.bed", col_names=c("chrom.hg38", "chromStart.hg38", "chromEnd.hg38", "x", "y"))
+
+hdl_scores <- bed_hdl_hg19_new %>% add_column(hdl_prs_hg38)
+
+```
+# add back in failed SNP conversion
+
+# find which row it should be
+idx <- which(bed$chrom == "chr19" & bed$chromStart == 54763072 & bed$chromEnd == 54763073)
+
+# insert new row by shifting rows down by 1
+prs_hg38[(idx + 1):(nrow(prs_hg38) + 1), ] <- prs_hg38[idx:nrow(prs_hg38), ]
+prs_hg38[idx, ] <- list("chr19", 54259223, 54259224)
+
+# double check
+prs_hg38[idx:(idx+3), ]
+
+table(duplicated(prs_hg38[, c("chrom", "chromStart")]))
+
+
+# find which row it should be
+idx <- which(bed$chrom == "chr19" & bed$chromStart == 54756141 & bed$chromEnd == 54756142)
+
+# insert new row by shifting rows down by 1
+prs_hg38[(idx + 1):(nrow(prs_hg38) + 1), ] <- prs_hg38[idx:nrow(prs_hg38), ]
+prs_hg38[idx, ] <- list("chr19", 4252278, 4252279)
+
+# double check
+prs_hg38[idx:(idx+3), ]
+
+
+
+Merge back in with scores
+
+```{r}
+#hdl_prs_hg38 <-hdl_prs_hg38 %>% rename_with(~ paste0(.x, ".hg38"))
+#hdl_scores <- bed_hdl_hg19_new %>% add_column(hdl_prs_hg38)
+```
+
+# Extract variants from Freeze9 GDS files
+
+Create a data frame with genotypes for all 9,009 variants for the score
+
+```{r}
+table(hdl_scores$chr_name) # all chromosomes
+```
+
+## Example: Chromosome 1 
+
+```{r, eval=FALSE}
+# chr 1
+tmp.scores <- hdl_scores %>% filter(chr_name == 1)
+
+# extract just the PRS variants from this chr
+#gds <- seqOpen("gds/samoa-chr1.dose_10a") #freeze 8
+gds <- seqOpen("gds/discovery-9b-samoa-chr1.dose.gds")  # freeze 9 
+pos <- seqGetData(gds, "position")
+seqSetFilter(gds, variant.sel = (pos %in% tmp.scores$chromEnd.hg38))
+pos <- seqGetData(gds, "position")
+
+# extract alleles from PRS variants (format: "ref,alt")
+alleles <- seqGetData(gds, "allele")
+ref <- sapply(1:length(alleles), function(i) strsplit(alleles[i], ",")[[1]][1])
+alt <- sapply(1:length(alleles), function(i) strsplit(alleles[i], ",")[[1]][2])
+
+maf <- seqGetData(gds, "annotation/info/MAF")
+
+samoa.vars <- tibble(var.id = seqGetData(gds, "variant.id"), # matches column name in dos (below)
+                     chr = rep(1, length(pos)), 
+                     pos = pos,
+                     ref = ref, 
+                     alt = alt,
+                     maf = maf)
+
+samoa.vars
+
+# get genotypes (imputed dosages)
+dos <- imputedDosage(gds, dosage.field="DS", use.names=TRUE) %>% as.data.frame() %>% rownames_to_column(., "ID") 
+dos[1:5,1:5]
+
+seqClose(gds)
+
+```
+
+
+### Investigate the variants from the PRS that are not in the GDS file
+
+```{r}
+tmp.scores$inGDS <- FALSE
+tmp.scores$inGDS[tmp.scores$chromEnd.hg38 %in% pos] <- TRUE
+
+table(tmp.scores$inGDS)
+
+
+miss.pos <- tmp.scores %>% filter(inGDS == FALSE) %>% mutate(SNP = paste0(chr_name, ":", chromEnd.hg38))
+miss.pos
+```
+
+
+Look for variants in imputation working files
+
+```{bash}
+#grep -m 1 '1:56105434' /home/jzz10/gwas/freeze8-imputed/freeze8-samoa-hg38-chr1-imputed.info
+grep -m 1 '1:63199348' /home/mok36/imputation_code/freeze9b/discovery/9_Minimac4_imputation/discovery-9b-hg38-chr1-imputed.info
+```
+
+Check if all these variants had MAF = 0 and that's why they're excluded (not run with freeze 9 as maf=0 variants are now included in the freeze 9 gds files)
+
+```{r, eval=FALSE}
+fileConn <- file("find-missing-PRS-variants-chr1.sh")
+
+writeLines(c("#!/bin/sh",
+             paste0("grep -m 1 '\\<", miss.pos$SNP, "\\>' /home/jzz10/gwas/freeze8-imputed/freeze8-samoa-hg38-chr1-imputed.info")), 
+           # m -1 means spit out the first result and then stop
+           # \<stuff\>' means match exactly that (not stuff with extra digits)
+           fileConn)
+
+close(fileConn)
+```
+
+
+```{bash, eval=FALSE}
+/bin/sh find-missing-PRS-variants-chr1.sh > info-chr1.info
+```
+
+```{r, eval=FALSE}
+info.chr1 <- read_table("info-chr1.info", 
+                        col_names = c("SNP", "REF0", "ALT1", "ALT_Frq", "MAF", "AvgCall", "Rsq", "Genotyped"),
+                        col_types = "cccddddc-----",
+                        na="-")
+
+table(info.chr1$MAF) # Check all MAF is 0
+
+nrow(info.chr1) == nrow(miss.pos) # check that it found all variants
+nrow(miss.pos) - nrow(info.chr1) # number of SNPs missing
+
+
+
+# identify which are still missing
+info.chr1$POS <- sapply(info.chr1$SNP, function(x) str_split(x, ":")[[1]][2])
+
+tmp.scores$MAF0 <- FALSE
+tmp.scores$MAF0[(tmp.scores$chromEnd.hg38 %in% info.chr1$POS)] <- TRUE
+table(tmp.scores$MAF0)
+
+still.missing <- tmp.scores %>% filter(!MAF0 & !inGDS) 
+still.missing <- still.missing %>% mutate(chr_sites = paste0("chr", chr_name)) # sites files use chr prefix
+
+still.missing
+
+write_delim(still.missing %>% dplyr::select(chr_sites, chromEnd.hg38), 
+            file = "find-missing-PRS-variants-from-sites-chr1.region", 
+            col_names = FALSE,
+            delim="\t")
+```
+
+look for missing variants in the sites files  
+
+```{r}
+still.missing <- miss.pos %>% mutate(chr_sites = paste0("chr", chr_name)) # sites files use chr prefix
+
+write_delim(still.missing %>% dplyr::select(chr_sites, chromEnd.hg38), 
+            file = "find-missing-PRS-variants-from-sites-chr1-f9.region", 
+            col_names = FALSE,
+            delim="\t")
+```
+
+```{bash, eval=FALSE}
+bcftools view -R find-missing-PRS-variants-from-sites-chr1-f9.region /home/shared_data/samoa/wgs/freeze.9b/sites/freeze.9b.chr1.pass_and_fail.sites.bcf -Ov -o freeze.9b.sites.missing.vcf
+bcftools query -f'%CHROM  %POS  %REF  %ALT %QUAL %FILTER %INFO/AC\n' freeze.9b.sites.missing.vcf -o freeze.9b.sites.missing.txt
+```
+
+```{r}
+sites.file.miss <- read_table("freeze.9b.sites.missing.txt", 
+                              col_names = c("CHROM", "POS", "REF", "ALT", "QUAL", "FILTER", "AC"))
+
+table(sites.file.miss$FILTER) # most variables failed filter
+
+tmp.scores$FAILED_FILTER <- FALSE
+tmp.scores$FAILED_FILTER[(tmp.scores$chromEnd.hg38 %in% sites.file.miss$POS)] <- TRUE
+table(tmp.scores$FAILED_FILTER)
+
+#table(colSums(tmp.scores[, c("inGDS", "MAF0", "FAILED_FILTER")])) # any still missing (column sum of 0)? no (freeze 8)
+table(colSums(tmp.scores[, c("inGDS", "FAILED_FILTER")])) # any still missing (column sum of 0)? no (freeze 9)
+```
+
+Summarize investigation of variants on chr 1
+
+```{r}
+nrow(tmp.scores) # number of variants in PRS on chr1
+
+table(tmp.scores$inGDS) # number of variants available in Samoan GDS (test data)
+table(tmp.scores$inGDS) %>% prop.table() 
+
+maf0 <- samoa.vars %>% filter(maf == 0)
+tmp.scores$MAF0 <- FALSE
+tmp.scores$MAF0[(tmp.scores$chromEnd.hg38 %in% maf0$pos)] <- TRUE
+
+table(tmp.scores$MAF0) # number of variants that are monomorphic in Samoans (test data)
+table(tmp.scores$MAF0) %>% prop.table()
+
+table(tmp.scores$FAILED_FILTER) # number of variants that failed QC in Samoans (test data)
+table(tmp.scores$FAILED_FILTER) %>% prop.table()
+
+```
+
+**Freeze 9** From chr 1, there are 1,102 variants in++++++++++++++
+the PRS; of those 1068 (97%) are present in the Samoan GDS files and 34 (3%) failed QC. There are 822 polymorphic variants in the Samoan data, with 280 (25%) monomorphic.
+
+**Freeze 8** From chr 1, there are 1,102 variants in the PRS. Of those 691 (63%) are present and polymorphic in the Samoan data, 389 (35%) are monomorphic in the Samoan data, and 22 (2%) failed QC in the Samoan data. 
+
+### Apply PRS to Samoan data
+
+### Create Scoring File
+```{r}
+dim(tmp.scores) # PRS variants
+
+dim(samoa.vars) # Samoan variants
+samoa.vars
+
+# check allele agreement
+scoring.file <- inner_join(samoa.vars, tmp.scores[, c("effect_allele", "other_allele", "effect_weight", "chromEnd.hg38")], by = c("pos" = "chromEnd.hg38"))
+
+scoring.file
+
+scoring.file$alleles.match <- FALSE
+scoring.file$alleles.match[scoring.file$alt == scoring.file$effect_allele & scoring.file$ref == scoring.file$other_allele] <- TRUE
+table(scoring.file$alleles.match)
+
+# create column to indicate whether to flip dosage (2 -> 0, etc) when generating PRS
+scoring.file$alleles.flip <- FALSE
+scoring.file$alleles.flip[scoring.file$alt == scoring.file$other_allele & scoring.file$ref == scoring.file$effect_allele] <- TRUE
+table(scoring.file$alleles.flip)
+
+# double check no variant has both
+xtabs(~ alleles.flip + alleles.match, data = scoring.file)
+
+# non-matching alleles
+scoring.file %>% filter(!alleles.flip &!alleles.match)
+
+# possible strand flip (A -> T, C -> G, G -> C, T -> A)
+strand_flip <- function(allele){
+  if (allele == "A") {
+    flip <- "T"
+  } else if (allele == "C") {
+    flip <- "G"
+  } else if (allele == "G") {
+    flip <- "C"
+  } else if (allele == "T") {
+    flip <- "A"
+  }
+  return(flip)
+}
+
+View(scoring.file)
+scoring.file$flip.strand <- FALSE 
+
+for(i in 1:nrow(scoring.file)){
+  if(!isTRUE(scoring.file$alleles.match[i]) & !isTRUE(scoring.file$alleles.flip[i])) {
+    if (isTRUE(scoring.file$alt[i] == strand_flip(scoring.file$effect_allele[i])) & 
+        isTRUE(scoring.file$ref[i] == strand_flip(scoring.file$other_allele[i]))) {
+      scoring.file$flip.strand[i] <- TRUE
+    }
+  }
+}
+
+table(scoring.file$flip.strand)
+
+scoring.file$flip.strand.swap.alleles <- FALSE
+for(i in 1:nrow(scoring.file)){
+  if(!scoring.file$alleles.match[i] & !scoring.file$alleles.flip[i] & !scoring.file$flip.strand[i]){
+    if (scoring.file$alt[i] == strand_flip(scoring.file$other_allele[i]) & scoring.file$ref[i] == strand_flip(scoring.file$effect_allele[i])){
+      scoring.file$flip.strand.swap.alleles[i] <- TRUE
+    }
+  }
+}
+
+table(scoring.file$flip.strand.swap.alleles)
+
+# flag to exclude a variant for mismatched alleles
+scoring.file$drop <- FALSE
+scoring.file$drop[!scoring.file$alleles.match & 
+                  !scoring.file$alleles.flip & 
+                  !scoring.file$flip.strand & 
+                  !scoring.file$flip.strand.swap.alleles] <- TRUE
+table(scoring.file$drop)
+
+final.scoring.file <- scoring.file %>% filter(!drop)
+```
+
+### Assign Individual Scores
+```{r, eval=FALSE}
+# subset dos to match the final scoring file
+final.dos <- dos %>% dplyr::select(ID, as.character(final.scoring.file$var.id))
+
+# check that they are lined up in the same variant order
+table(names(final.dos)[2:ncol(final.dos)] == as.character(final.scoring.file$var.id))
+
+chr1.scores <- tibble(ID = final.dos$ID,
+                      score = 0)
+
+head(chr1.scores)
+
+# Flip dosages for variants that have allele flips
+cols.to.flip <- final.scoring.file %>% filter(alleles.flip | flip.strand.swap.alleles) %>% dplyr::pull(var.id) %>% as.character
+final.dos[,cols.to.flip] <- (2 - final.dos[,cols.to.flip])
+
+# For each person, extract the vector of dosages and multiple by the vector of effect weights
+chr1.weights <- final.scoring.file %>% dplyr::pull(effect_weight)
+for(person.i in 1:nrow(chr1.scores)){
+  chr1.scores$score[person.i] <- sum(chr1.weights * final.dos[person.i, -1 ]) 
+}
+
+summary(chr1.scores$score)
+
+```
+
+# Repeat process for all chromosomes
+
+## Extract variants from Freeze9 GDS files and create scoring files
+
+Updated to (1) remove non SGIDs from the gds file before extracting dosages, and (2) imputed to the mean dosage for any variants with missing genotypes (those that were dropped from the WGS data due to QC [filter==SVM, etc.] but that were genotyped and had a handful of missing genotypes)
+
+```{r, eval=FALSE}
+for(chr.i in c(1:22)){
+  
+  cat("\n\n")
+  cat(paste0("extracting variants for chromosome ", chr.i))
+  cat("\n")
+
+  # extract scoring info for that chr
+  tmp.scores <- scores %>% filter(chr_name == chr.i)
+
+  # extract just the PRS variants from this chr
+  #gds <- seqOpen(paste0("gds/samoa-chr", chr.i, ".dose_10a.gds"))
+  gds <- seqOpen( paste0("gds/discovery-9b-samoa-chr", chr.i, ".dose.gds"))  # freeze 9 
+
+  # drop non-SGIDs
+  sample.id <- seqGetData(gds, "sample.id")
+  keep.id <- sample.id[grep("^SG", sample.id)]
+  seqSetFilter(gds, sample.id=keep.id)
+  
+  # extract variants by position in scoring file
+  pos <- seqGetData(gds, "position")
+  seqSetFilter(gds, variant.sel = (pos %in% tmp.scores$chromEnd.hg38))
+  pos <- seqGetData(gds, "position")
+  
+  # extract alleles from PRS variants (format: "ref,alt")
+  alleles <- seqGetData(gds, "allele")
+  ref <- sapply(1:length(alleles), function(i) strsplit(alleles[i], ",")[[1]][1])
+  alt <- sapply(1:length(alleles), function(i) strsplit(alleles[i], ",")[[1]][2])
+  
+  maf <- seqGetData(gds, "annotation/info/MAF")
+
+  samoa.vars <- tibble(var.id = seqGetData(gds, "variant.id"), # matches column name in dos (below)
+                     chr = rep(chr.i, length(pos)), 
+                     pos = pos,
+                     ref = ref, 
+                     alt = alt,
+                     maf = maf)
+
+  
+  # get genotypes (imputed dosages)
+  dos <- imputedDosage(gds, dosage.field="DS", use.names=TRUE) %>% as.data.frame() %>% rownames_to_column(., "ID") 
+  seqClose(gds)
+
+  # mean impute missingness
+  cols.to.impute <- which(colSums(is.na(dos))>0) %>% unname()
+  for(col.i in cols.to.impute) {
+    dos[which(is.na(dos[, col.i])), col.i] <- mean(dos[,col.i], na.rm = TRUE)
+  }
+  
+  
+  # count how many variants found
+  tmp.scores$inGDS <- FALSE
+  tmp.scores$inGDS[tmp.scores$chromEnd.hg38 %in% pos] <- TRUE
+  
+  cat(paste0("variants located on chr ", chr.i))
+  print(table(tmp.scores$inGDS))
+  cat("\n\n")
+
+  ### Harmonization between Samoan variants and PRS variants
+
+  # check allele agreement
+  scoring.file <- inner_join(samoa.vars, tmp.scores[, c("effect_allele", "other_allele", "effect_weight", "chromEnd.hg38")], by = c("pos" = "chromEnd.hg38"))
+  
+  scoring.file$alleles.match <- FALSE
+  scoring.file$alleles.match[scoring.file$alt == scoring.file$effect_allele & scoring.file$ref == scoring.file$other_allele] <- TRUE
+  table(scoring.file$alleles.match)
+  
+  # create column to indicate whether to flip dosage (2 -> 0, etc) when generating PRS
+  scoring.file$alleles.flip <- FALSE
+  scoring.file$alleles.flip[scoring.file$alt == scoring.file$other_allele & scoring.file$ref == scoring.file$effect_allele] <- TRUE
+  
+  cat(paste0("allele flips on chr ", chr.i))
+  print(table(scoring.file$alleles.flip))
+  cat("\n\n")
+
+  # create column to indicate strand flips
+  scoring.file$flip.strand <- FALSE
+  for(i in 1:nrow(scoring.file)){
+    if(!scoring.file$alleles.match[i] & !scoring.file$alleles.flip[i]){
+      if (scoring.file$alt[i] == strand_flip(scoring.file$effect_allele[i]) & scoring.file$ref[i] == strand_flip(scoring.file$other_allele[i])){
+        scoring.file$flip.strand[i] <- TRUE
+      }
+    }
+  }
+  
+  cat(paste0("strand flips on chr ", chr.i))
+  print(table(scoring.file$flip.strand))
+  cat("\n\n")
+  
+  # create column for a flipped strand with allele swap
+  scoring.file$flip.strand.swap.alleles <- FALSE
+  for(i in 1:nrow(scoring.file)){
+    if(!scoring.file$alleles.match[i] & !scoring.file$alleles.flip[i] & !scoring.file$flip.strand[i]){
+      if (scoring.file$alt[i] == strand_flip(scoring.file$other_allele[i]) & scoring.file$ref[i] == strand_flip(scoring.file$effect_allele[i])){
+        scoring.file$flip.strand.swap.alleles[i] <- TRUE
+      }
+    }
+  }
+  
+  cat(paste0("strand flips with allele swap on chr ", chr.i))
+  print(  table(scoring.file$flip.strand.swap.alleles))
+  cat("\n\n")
+  
+  # flag to exclude a variant for mismatched alleles
+  scoring.file$drop <- FALSE
+  scoring.file$drop[!scoring.file$alleles.match & 
+                    !scoring.file$alleles.flip & 
+                    !scoring.file$flip.strand & 
+                    !scoring.file$flip.strand.swap.alleles] <- TRUE
+  
+  cat(paste0("variants with unreconcilable alleles to be dropped on chr ", chr.i))
+  print(table(scoring.file$drop))
+  cat("\n\n")
+  
+  
+  # create final scoring file for chr
+  final.scoring.file <- scoring.file %>% filter(!drop)
+
+  # subset dos to match the final scoring file
+  final.dos <- dos %>% dplyr::select(ID, as.character(final.scoring.file$var.id))
+  
+  # check that they are lined up in the same variant order
+  cat(paste0("check variants align between scoring and dos files on chr ", chr.i))
+  print(table(names(final.dos)[2:ncol(final.dos)] == as.character(final.scoring.file$var.id)))
+  cat("\n\n") 
+  
+  # Flip dosages for variants that have allele flips
+  cols.to.flip <- final.scoring.file %>% filter(alleles.flip | flip.strand.swap.alleles) %>% dplyr::pull(var.id) %>% as.character
+  final.dos[,cols.to.flip] <- (2 - final.dos[,cols.to.flip])
+
+  save(final.scoring.file, file=paste0("scoring-files/final.scoring.file.chr", chr.i, ".RData"))
+  save(final.dos, file=paste0("dosages/final.dos.chr", chr.i))
+
+  rm(tmp.scores, samoa.vars, dos, scoring.file, final.scoring.file, final.dos)
+}
+
+
+```
+
+## Assign Individual Scores
+multiplym dosage and weights and add across chromosomes and add back into scoring file 
+
+```{r}
+for(chr.i in c(1:22)){
+  cat("\n\n")
+  cat(paste0("assigning scores for chromosome ", chr.i))
+  cat("\n")
+  
+  load(paste0("scoring-files/final.scoring.file.chr", chr.i, ".RData"))
+  load(paste0("dosages/final.dos.chr", chr.i))
+  
+  samoa.scores <- tibble(ID = final.dos$ID,
+                      score = 0)
+  
+  # For each person, extract the vector of dosages and multiple by the vector of effect weights
+  weights <- final.scoring.file %>% dplyr::pull(effect_weight)
+  
+  for(person.i in 1:nrow(samoa.scores)){
+    samoa.scores$score[person.i] <- sum(weights * final.dos[person.i, -1 ]) 
+  }
+  
+  cat(paste0("Summary of PRS on chr ", chr.i))
+  cat("\n")
+  print(summary(samoa.scores$score))
+  cat("\n\n") 
+
+  save(samoa.scores, file=paste0("prs-samoan-scores/samoa.prs.chr", chr.i, ".RData"))
+  rm(samoa.scores)
+
+}
+
+
+```
+
+### freeze 9 NA checks
+
+#### check chr 13 (freeze 9 only)
+
+assigning scores for chromosome 13
+Summary of PRS on chr 13
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max.    NA's 
+ 0.7965  0.9931  1.0408  1.0415  1.0886  1.2836    2504 
+ 
+```{r, eval=FALSE}
+chr.i <- 13
+
+  load(paste0("scoring-files/final.scoring.file.chr", chr.i, ".RData"), verbose=TRUE)
+  load(paste0("dosages/final.dos.chr", chr.i))
+  
+  samoa.scores <- tibble(ID = final.dos$ID,
+                      score = 0)
+  
+  # For each person, extract the vector of dosages and multiple by the vector of effect weights
+  weights <- final.scoring.file %>% dplyr::pull(effect_weight)
+  
+  for(person.i in 1:nrow(samoa.scores)){
+    samoa.scores$score[person.i] <- sum(weights * final.dos[person.i, -1 ]) 
+  }
+  
+  summary(samoa.scores$score)
+
+samoa.scores %>% filter(is.na(score)) %>% head()
+
+summary(weights)
+
+# check for missing dosages
+#apply(final.dos[, -1], 2, summary)
+names(which(colSums(is.na(final.dos))>0))
+summary(final.dos[, names(which(colSums(is.na(final.dos))>0))]) 
+
+# print IDs with missing dosage
+final.dos$ID[which(is.na(final.dos[, names(which(colSums(is.na(final.dos))>0))]))]
+
+
+# do all missing dosages have HG IDs (1000G)? (no)
+length(grep("HG", 
+           final.dos$ID[which(is.na(final.dos[, names(which(colSums(is.na(final.dos))>0))]))]))
+
+# exclude 1000G (HG ids) and then print IDs with missing dosage
+no1000g <- final.dos[!str_detect(final.dos$ID, "HG"), ] 
+no1000g$ID[which(is.na(no1000g[, names(which(colSums(is.na(no1000g))>0))]))]
+
+# exclude 1000G (HG ids) and "NA" ids and then print IDs with missing dosage
+no1000g2 <- no1000g[!str_detect(no1000g$ID, "NA"), ] 
+no1000g2$ID[which(is.na(no1000g2[, names(which(colSums(is.na(no1000g2))>0))]))]
+
+
+# variant name
+final.scoring.file %>% filter(var.id == names(which(colSums(is.na(final.dos))>0)))
+```
+
+#### check chr 14 (freeze 9 only)
+
+assigning scores for chromosome 14
+Summary of PRS on chr 14
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max.    NA's 
+-0.2953  0.0338  0.0698  0.0690  0.1024  0.2511    2530 
+
+
+```{r, eval=FALSE}
+chr.i <- 14
+
+  load(paste0("scoring-files/final.scoring.file.chr", chr.i, ".RData"), verbose=TRUE)
+  load(paste0("dosages/final.dos.chr", chr.i))
+  
+  samoa.scores <- tibble(ID = final.dos$ID,
+                      score = 0)
+  
+  # For each person, extract the vector of dosages and multiple by the vector of effect weights
+  weights <- final.scoring.file %>% dplyr::pull(effect_weight)
+  
+  for(person.i in 1:nrow(samoa.scores)){
+    samoa.scores$score[person.i] <- sum(weights * final.dos[person.i, -1 ]) 
+  }
+  
+  summary(samoa.scores$score)
+
+samoa.scores %>% filter(is.na(score)) %>% head()
+
+summary(weights)
+
+# check for missing dosages
+#apply(final.dos[, -1], 2, summary)
+names(which(colSums(is.na(final.dos))>0))
+summary(final.dos[, names(which(colSums(is.na(final.dos))>0))]) 
+
+# print IDs with missing dosage
+final.dos$ID[which(is.na(final.dos[, names(which(colSums(is.na(final.dos))>0))]))]
+
+
+# do all missing dosages have HG IDs (1000G)? (no)
+length(grep("HG", 
+           final.dos$ID[which(is.na(final.dos[, names(which(colSums(is.na(final.dos))>0))]))]))
+
+# exclude 1000G (HG ids) and then print IDs with missing dosage
+no1000g <- final.dos[!str_detect(final.dos$ID, "HG"), ] 
+no1000g$ID[which(is.na(no1000g[, names(which(colSums(is.na(no1000g))>0))]))]
+
+# exclude 1000G (HG ids) and "NA" ids and then print IDs with missing dosage
+no1000g2 <- no1000g[!str_detect(no1000g$ID, "NA"), ] 
+no1000g2$ID[which(is.na(no1000g2[, names(which(colSums(is.na(no1000g2))>0))]))]
+no1000g2$ID[which(is.na(no1000g2[, names(which(colSums(is.na(no1000g2))>0))]))] %>% length()
+
+# variant name
+final.scoring.file %>% filter(var.id == names(which(colSums(is.na(final.dos))>0)))
+```
+
+
+```{bash, eval=FALSE}
+grep 70685060 /home/mok36/imputation_code/freeze9b/discovery/9_Minimac4_imputation/discovery-9b-hg38-chr14-imputed.info
+
+bcftools view -r chr14:70685060 /home/shared_data/samoa/wgs/freeze.9b/sites/freeze.9b.chr14.pass_and_fail.sites.bcf -H
+
+grep 70685060 /home/mok36/imputation_code/freeze9b/discovery/3_Affy_discovery_samoa_plink/discovery-samoa-hg38-chr14.bim
+
+plink --bfile /home/mok36/imputation_code/freeze9b/discovery/3_Affy_discovery_samoa_plink/discovery-samoa-hg38-chr14 --freq --snp rs11845258 --out ~/lipids/prs/variant-checking/chr14_70685060
+```
+
+Variant with missing genotypes is one that was *not* imputed and was added back from the Affy data. 
+
+The genotyping rate is 0.991664 which translates to exactly 26 missing genotypes.
+
+#### check chr 19 (freeze 9 only)
+
+assigning scores for chromosome 19
+Summary of PRS on chr 19
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max.    NA's 
+  36.04   39.20   39.51   39.45   39.75   41.56    2556 
+
+```{r, eval=FALSE}
+chr.i <- 19
+
+
+  load(paste0("scoring-files/final.scoring.file.chr", chr.i, ".RData"), verbose=TRUE)
+  load(paste0("dosages/final.dos.chr", chr.i))
+  
+  samoa.scores <- tibble(ID = final.dos$ID,
+                      score = 0)
+  
+  # For each person, extract the vector of dosages and multiple by the vector of effect weights
+  weights <- final.scoring.file %>% dplyr::pull(effect_weight)
+  
+  for(person.i in 1:nrow(samoa.scores)){
+    samoa.scores$score[person.i] <- sum(weights * final.dos[person.i, -1 ]) 
+  }
+  
+  summary(samoa.scores$score)
+
+samoa.scores %>% filter(is.na(score)) %>% head()
+
+summary(weights)
+
+# check for missing dosages
+#apply(final.dos[, -1], 2, summary)
+names(which(colSums(is.na(final.dos))>0))
+
+### var 1
+variant <- names(which(colSums(is.na(final.dos))>0))[1]
+summary(final.dos[, variant]) 
+
+# print IDs with missing dosage
+final.dos$ID[which(is.na(final.dos[, variant]))]
+final.dos$ID[which(is.na(final.dos[, variant]))] %>% length()
+
+# do all missing dosages have HG IDs (1000G)? (no)
+length(grep("HG", 
+           final.dos$ID[which(is.na(final.dos[, variant]))]))
+
+# exclude 1000G (HG ids) and then print IDs with missing dosage
+no1000g <- final.dos[!str_detect(final.dos$ID, "HG"), ] 
+no1000g$ID[which(is.na(no1000g[, variant]))]
+
+# exclude 1000G (HG ids) and "NA" ids and then print IDs with missing dosage
+no1000g2 <- no1000g[!str_detect(no1000g$ID, "NA"), ] 
+no1000g2$ID[which(is.na(no1000g2[, variant]))]
+
+no1000g2$ID[which(is.na(no1000g2[, variant]))] %>% length()
+
+# variant name
+final.scoring.file %>% filter(var.id %in% names(which(colSums(is.na(final.dos))>0)))
+
+
+### var 2
+variant <- names(which(colSums(is.na(final.dos))>0))[2]
+summary(final.dos[, variant]) 
+
+# print IDs with missing dosage
+final.dos$ID[which(is.na(final.dos[, variant]))]
+final.dos$ID[which(is.na(final.dos[, variant]))] %>% length()
+
+# do all missing dosages have HG IDs (1000G)? (no)
+length(grep("HG", 
+           final.dos$ID[which(is.na(final.dos[, variant]))]))
+
+# exclude 1000G (HG ids) and then print IDs with missing dosage
+no1000g <- final.dos[!str_detect(final.dos$ID, "HG"), ] 
+no1000g$ID[which(is.na(no1000g[, variant]))]
+
+# exclude 1000G (HG ids) and "NA" ids and then print IDs with missing dosage
+no1000g2 <- no1000g[!str_detect(no1000g$ID, "NA"), ] 
+no1000g2$ID[which(is.na(no1000g2[, variant]))]
+
+no1000g2$ID[which(is.na(no1000g2[, variant]))] %>% length()
+
+# variant name
+final.scoring.file %>% filter(var.id %in% names(which(colSums(is.na(final.dos))>0)))
+
+```
+
+```{bash, eval=FALSE}
+grep 57840921 /home/mok36/imputation_code/freeze9b/discovery/9_Minimac4_imputation/discovery-9b-hg38-chr19-imputed.info
+
+bcftools view -r chr19:57840921 /home/shared_data/samoa/wgs/freeze.9b/sites/freeze.9b.chr19.pass_and_fail.sites.bcf -H
+
+grep 57840921 /home/mok36/imputation_code/freeze9b/discovery/3_Affy_discovery_samoa_plink/discovery-samoa-hg38-chr19.bim
+
+plink --bfile /home/mok36/imputation_code/freeze9b/discovery/3_Affy_discovery_samoa_plink/discovery-samoa-hg38-chr19 --freq --snp rs2562052 --out ~/lipids/prs/variant-checking/chr19_57840921
+```
+
+Variant with missing genotypes is one that was *not* imputed and was added back from the Affy data. 
+
+The genotyping rate is 0.983328 which translates to exactly 52 missing genotypes.
+
+
+### rescore variants with NA dosages
+
+```{r}
+
+```
+
+
+### freeze 8 NA checks
+
+#### check chr 3 (freeze 8 only)
+
+assigning scores for chromosome 3
+Summary of PRS on chr 3
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max.    NA's 
+ 0.9737  1.2312  1.2853  1.2825  1.3368  1.5546    1195 
+
+
+```{r, eval=FALSE}
+chr.i <- 3
+
+  load(paste0("scoring-files/final.scoring.file.chr", chr.i, ".RData"), verbose=TRUE)
+  load(paste0("dosages/final.dos.chr", chr.i))
+  
+  samoa.scores <- tibble(ID = final.dos$ID,
+                      score = 0)
+  
+  # For each person, extract the vector of dosages and multiple by the vector of effect weights
+  weights <- final.scoring.file %>% dplyr::pull(effect_weight)
+  
+  for(person.i in 1:nrow(samoa.scores)){
+    samoa.scores$score[person.i] <- sum(weights * final.dos[person.i, -1 ]) 
+  }
+  
+  summary(samoa.scores$score)
+
+samoa.scores %>% filter(is.na(score)) %>% head()
+
+summary(weights)
+
+# check for missing dosages
+#apply(final.dos[, -1], 2, summary)
+names(which(colSums(is.na(final.dos))>0))
+summary(final.dos[, names(which(colSums(is.na(final.dos))>0))]) # these are genotyped variants that were not imputed
+
+final.scoring.file %>% filter(var.id == names(which(colSums(is.na(final.dos))>0)))
+table(final.dos[, names(which(colSums(is.na(final.dos))>0))], useNA = "always") # these are genotyped variants that were not imputed
+```
+#### check chr 19  (freeze 8 only)
+
+assigning scores for chromosome 19
+Summary of PRS on chr 19
+   Min. 1st Qu.  Median    Mean 3rd Qu.    Max.    NA's 
+  8.782  11.304  11.590  11.538  11.836  12.593    1195 
+
+
+```{r, eval=FALSE}
+chr.i <- 19
+
+  load(paste0("scoring-files/final.scoring.file.chr", chr.i, ".RData"))
+  load(paste0("dosages/final.dos.chr", chr.i))
+  
+  samoa.scores <- tibble(ID = final.dos$ID,
+                      score = 0)
+  
+  # For each person, extract the vector of dosages and multiple by the vector of effect weights
+  weights <- final.scoring.file %>% dplyr::pull(effect_weight)
+  
+  for(person.i in 1:nrow(samoa.scores)){
+    samoa.scores$score[person.i] <- sum(weights * final.dos[person.i, -1 ]) 
+  }
+  
+  summary(samoa.scores$score)
+
+samoa.scores %>% filter(is.na(score)) %>% head()
+
+summary(weights)
+
+# check for missing dosages
+#apply(final.dos[, -1], 2, summary)
+names(which(colSums(is.na(final.dos))>0))
+summary(final.dos[, names(which(colSums(is.na(final.dos))>0))]) # these are genotyped variants that were not imputed
+
+final.scoring.file %>% filter(var.id == names(which(colSums(is.na(final.dos))>0)))
+table(final.dos[, names(which(colSums(is.na(final.dos))>0))], useNA = "always") # these are genotyped variants that were not imputed
+
+```
+
+#### resolve missing genotypes (freeze 8 only)
+
+What to do with these two variants? 
+Drop from PRS or score them only on the people who are genotyped?
+
+
+For now, drop from the PRS.
+
+##### rescore chr 3 (freeze 8 only)
+```{r, eval=FALSE}
+chr.i <- 3
+
+  load(paste0("scoring-files/final.scoring.file.chr", chr.i, ".RData"), verbose=TRUE)
+  load(paste0("dosages/final.dos.chr", chr.i))
+  
+  samoa.scores <- tibble(ID = final.dos$ID,
+                      score = 0)
+  
+  exclude <- names(which(colSums(is.na(final.dos))>0))
+
+  final.dos <- final.dos[, which(colSums(is.na(final.dos))==0)] # only keep variants without missing data
+
+  # For each person, extract the vector of dosages and multiple by the vector of effect weights
+  weights <- final.scoring.file %>% filter(var.id != exclude) %>% dplyr::pull(effect_weight)
+  
+  for(person.i in 1:nrow(samoa.scores)){
+    samoa.scores$score[person.i] <- sum(weights * final.dos[person.i, -1 ]) 
+  }
+  
+  summary(samoa.scores$score)
+
+  save(samoa.scores, file=paste0("prs-samoan-scores/samoa.prs.chr", chr.i, ".RData"))
+
+```
+
+##### rescore chr 19 (freeze 8 only)
+```{r, eval=FALSE}
+chr.i <- 19
+
+  load(paste0("scoring-files/final.scoring.file.chr", chr.i, ".RData"), verbose=TRUE)
+  load(paste0("dosages/final.dos.chr", chr.i))
+  
+  samoa.scores <- tibble(ID = final.dos$ID,
+                      score = 0)
+  
+  exclude <- names(which(colSums(is.na(final.dos))>0))
+
+  final.dos <- final.dos[, which(colSums(is.na(final.dos))==0)] # only keep variants without missing data
+
+  # For each person, extract the vector of dosages and multiple by the vector of effect weights
+  weights <- final.scoring.file %>% filter(var.id != exclude) %>% dplyr::pull(effect_weight)
+  
+  for(person.i in 1:nrow(samoa.scores)){
+    samoa.scores$score[person.i] <- sum(weights * final.dos[person.i, -1 ]) 
+  }
+  
+  summary(samoa.scores$score)
+
+  save(samoa.scores, file=paste0("prs-samoan-scores/samoa.prs.chr", chr.i, ".RData"))
+
+```
+
+## What percent of PRS variants have MAF = 0 in Samoans?
+
+```{r}
+maf.counts <- data.frame(chr = 1:22,
+                         n.snp = rep(NA, 22),
+                         n.maf0 = rep(0, 22))
+for(i in 1:22){
+  load(paste0("scoring-files/final.scoring.file.chr", i, ".RData"), verbose=FALSE)
+  maf.counts$n.snp[i] <- nrow(final.scoring.file)
+  maf.counts$n.maf0[i] <- sum(final.scoring.file$maf == 0, na.rm = T) # 2 vars on chr 19 have missing MAF info
+}
+
+sum(maf.counts$n.snp)
+sum(maf.counts$n.maf0)
+sum(maf.counts$n.maf0)/sum(maf.counts$n.snp)
+```
+
+
+# PRS evaluation in Samoans
+
+## Merge in all chromosomes together
+```{r}
+load("prs-samoan-scores/samoa.prs.chr1.RData")
+names(samoa.scores)[2] <- "score.chr1"
+
+samoa.scores.all <- samoa.scores 
+
+
+for(chr.i in c(2:22)){
+  load(paste0("prs-samoan-scores/samoa.prs.chr", chr.i, ".RData"))
+  names(samoa.scores)[2] <- paste0("score.chr", chr.i)
+  samoa.scores.all <- left_join(samoa.scores.all, samoa.scores, by = "ID")
+}
+
+dim(samoa.scores.all)
+
+samoa.scores.all$prs <- rowSums(samoa.scores.all[,-1])
+summary(samoa.scores.all$prs)
+sd(samoa.scores.all$prs)
+```
+
+
+
+## Distribution of PRS in Samoans
+```{r}
+ggplot(data=samoa.scores.all, aes(x=prs)) + 
+  geom_density() + 
+  theme_bw()
+```
+
+
+## Association with LDL
+
+Merge with phenotype data
+
+```{bash, eval=FALSE}
+#ln -s /home/jnc35/gwas/imputed/imputed_freeze8/LDL_C2-model1/LDL_C2-phenotype.RData
+
+ln -s /home/jnc35/gwas/imputed/imputed_freeze9/discovery/Cholesterol2-model1/Cholesterol2-phenotype.RData
+
+ln -s /home/jnc35/gwas/imputed/imputed_freeze9/discovery/population_structure/data/samoa-hg38-pcair-round2_pcair.RData
+
+
+
+```
+
+
+```{r}
+load("Cholesterol2-phenotype.RData", verbose=TRUE)
+
+head(pData(annot))
+
+pca <- get(load("./samoa-hg38_pcair-round2_pcair.RData"))
+pcs <- as.data.frame(pca$vectors)
+pcs$sample.id <- row.names(pcs)
+
+tmp.df <- left_join(samoa.scores.all, pData(annot), by = c("ID" = "sample.id"))
+samoa.prs.df <- left_join(tmp.df, pcs[,c("sample.id", "V1", "V2", "V3")], by = c("ID" = "sample.id"))
+
+samoa.prs.df
+```
+
+### Unadjusted model
+```{r}
+ggplot(data = samoa.prs.df, aes(y=Cholesterol2, x=prs)) + 
+  geom_point(alpha=0.3, color="#004D85") + 
+  geom_smooth(color="gray20", se=FALSE) + 
+  theme_classic() +
+  xlab("Polygenic Risk Score") + 
+  ylab("Total Cholesterol (mg/dL)") +
+  scale_x_continuous(breaks=seq(43,50)) +
+  theme(text=element_text (size=32))
+
+ggsave("PRS-Cholesterol2_scatterplot.png", width=16, height=10, units="in")
+
+
+m1 <- lm(Cholesterol2 ~ prs, data = samoa.prs.df)
+summary(m1)
+
+```
+
+didn't end up uding this. ignore stuff with norm 
+
+```{r}
+samoa.prs.df$PRS_norm <- RankNorm(samoa.prs.df$prs)
+m1.n <- lm(Cholesterol2 ~ PRS_norm, data = samoa.prs.df)
+summary(m1.n)
+```
+
+
+### Adjust for age, sex, and PCAs
+
+```{r}
+m2 <- lm(Cholesterol2 ~ prs + age + age2 + sex + sex_age + sex_age2 + V1 + V2 + V3, data = samoa.prs.df)
+summary(m2)
+confint(m2)
+
+# p-value for prs
+beta <- summary(m2)$coefficients["prs", "Estimate"]
+beta
+confint(m2)
+tstat <- summary(m2)$coefficients["prs", "t value"]
+2*pt(abs(tstat), df=2849, lower.tail=FALSE)
+
+#m2.n <- lm(Cholesterol2 ~ PRS_norm + age + age2 + sex + sex_age + sex_age2 + V1 + V2 + V3, data = samoa.prs.df)
+#summary(m2.n)
+```
+
+
+### R2 - PRS evaluation metric
+
+```{r}
+rsq.partial(objF = m2)
+
+rsq.partial(objF = m2)$partial.rsq[1]
+
+#rsq.partial(objF = m2.n)
+
+#rsq.partial(objF = m2.n)$partial.rsq[1]
+```
+**The Partial R2 for the PRS in Samoans in 10.2%. ** 
+
+Evaluation of PRS in Graham et al 2021:
+
+"For each individual in the testing cohorts, PRS were calculated as the sum of the dosages multiplied by the given weight at each variant."  
+
+"Model fit was assessed using the adjusted R2 of a linear model for LDL-C value at initial assessment adjusted for cholesterol medication (divided by 0.7 to estimate pre-medication levels) with sex, batch, age at initial assessment and PCs 1–4 as covariates (Supplementary Tables 21–23)."  
+
+"Supplementary Table 23: Prediction of LDL-C in MGI individuals based on varying numbers of PCs included in the model
+The polygenic score was normalized within each ancestry group separately"  
+
+"Adjusted R2 values were reported for each cohort and ancestry group, with 95% confidence intervals for the adjusted R2 values calculated using bootstrapping."  
+
+"The PRS developed from the multi-ancestry meta-analysis consistently showed the best or near-best performance in each group tested, with improved or comparable predictions relative to ancestry-matched scores (adjusted R2=0.10–0.16; Fig. 3, Supplementary Table 17, Extended Data Fig. 7)."  
+
+
+#### Bootstrap CI for R2
+
+```{r}
+set.seed(06082022)
+n.boot <- 1000
+boot.r2 <- rep(NA, times=n.boot)
+
+for(i in 1:n.boot){
+  boot.df <- samoa.prs.df[sample(1:nrow(samoa.prs.df), nrow(samoa.prs.df), replace=TRUE),]
+  boot.m2 <- lm(Cholesterol2 ~ prs + age + age2 + sex + sex_age + sex_age2 + V1 + V2 + V3, data = boot.df)
+  boot.r2[i] <- rsq.partial(objF = boot.m2)$partial.rsq[1]
+}
+
+hist(boot.r2)
+quantile(boot.r2, c(0.025, 0.975)) # 95% bootstrap CI for R2
+
+
+
+```
+
+### Plot for Poster
+
+
+Recreate Fig 3 from Graham et al 2021 put add in Samoan data
+
+https://www.nature.com/articles/s41586-021-04064-3/figures/3
+
+```{r}
+graham <- read_xlsx("41586_2021_4064_MOESM4_ESM.xlsx", sheet = "ST.17 PRS Validation", skip = 4)
+graham
+
+# extract R2 from the all-ancestry PRS evaluation
+graham <- graham %>% filter(Risk_score == "ALL") 
+
+# does it match the groups in Fig 3? 
+graham %>% pull(ancestry) %>% table()
+
+# almost - there is 1 more AFR
+graham
+
+# In this table AADM cohort has an overall and east/west split and AWI-Gen has an overall and East/South/West split
+graham %>% pull(cohort) %>% table()
+
+# drop the combined points for AADM and AWI-GEN (not in the Fig 3 from the Graham paper)
+graham <- graham %>% filter( !(ancestry == "AFR" & cohort == "AADM") )
+graham <- graham %>% filter( !(ancestry == "AFR" & cohort == "AWI-Gen") )
+graham
+graham %>% pull(ancestry) %>% table() # matches Fig 3
+
+newfig <- graham %>% add_row(Risk_score = NA,
+                             `LDL value type` = NA,
+                             adj_R2 = 0.1017,
+                             Lower_95_CI = 0.0823,
+                             Upper_95_CI = 0.1242,
+                             ancestry = "Samoan", 
+                             cohort = "OLaGA")
+
+newfig %>% select(ancestry, cohort)
+
+newfig <- newfig %>% mutate(label = case_when(ancestry == "AFR (East)" & cohort == "AADM" ~ "AADM\nKenya",
+                                              ancestry == "AFR (West)" & cohort == "AADM" ~ "AADM\nNigeria,\nGhana",
+                                              ancestry == "AFR (East)" & cohort == "AWI-Gen-East" ~ "AWI-Gen\nKenya",
+                                              ancestry == "AFR (South)" & cohort == "AWI-Gen-South" ~ "AWI-Gen\nS.Africa",
+                                              ancestry == "AFR (West)" & cohort == "AWI-Gen-West" ~ "AWI-Gen\nBurkina Faso,\nGhana",
+                                              ancestry == "SAS" & cohort == "ELGH" ~ "ELGHa",
+                                              ancestry == "EAS" & cohort == "KoGES" ~ "KoGES",
+                                              ancestry == "AFRAMR" & cohort == "MGI" ~ "MGI\nAFRAMR",
+                                              ancestry == "EUR" & cohort == "MGI" ~ "MGI\nEUR",
+                                              ancestry == "AFRAMR" & cohort == "MVP" ~ "MVP\nAFRAMR",
+                                              ancestry == "ASN" & cohort == "MVP" ~ "MVP\nASN",
+                                              ancestry == "EUR" & cohort == "MVP" ~ "MVP\nEUR",
+                                              ancestry == "HIS" & cohort == "MVP" ~ "MVP\nHIS",
+                                              ancestry == "AFRAMR" & cohort == "PMBB" ~ "PMBB",
+                                              ancestry == "EAS" & cohort == "ToMMo" ~ "ToMMo",
+                                              ancestry == "Samoan" & cohort == "OLaGA" ~ "Samoa"))
+
+
+newfig <- newfig %>% mutate(ancestry2 = factor(str_replace_all(ancestry, c("AFRAMR" = "African American",
+                                                                    "AFR" = "African",
+                                                                    "SAS" = "South Asian", 
+                                                                    "EAS" = "East Asian", 
+                                                                    "ASN" = "Asian", 
+                                                                    "EUR" = "European",
+                                                                    "HIS" = "Hispanic")),
+                                               levels = c("African (East)", "African (West)", "African (South)", "African American", 
+                                                          "European", "Hispanic", "Asian", "East Asian", "South Asian", "Samoan")))
+
+ newfig <- newfig %>% mutate(label2 = factor(label, levels = newfig$label[order(newfig$ancestry2)]))
+
+
+ggplot(newfig, aes(x=label2, y=adj_R2, color=ancestry2)) + 
+  geom_errorbar(aes(ymin=Lower_95_CI, ymax=Upper_95_CI)) +
+  geom_point(size=2) +
+  scale_y_continuous(labels = c(0,0.05,0.10,0.15,0.20), limits = c(0, 0.20)) +
+  ylab(expression(R^2)) + 
+  xlab("") + 
+  theme_bw() + 
+  scale_color_discrete(name = "Ancestry") +
+  theme(text=element_text (size=16))
+
+#+
+#  scale_color_brewer(palette = "Paired")
+#manual(breaks = c("African (East)", "African (West)", "African (South)", "African American", 
+#                                "Asian", "East Asian", "South Asian",
+#                                "European", "Hispanic", "Samoan"),
+#                     values = c(PuRd[]"#c51b7d", "#e41a1c", "#e41a1c", "#e41a1c",
+#                                "#b8e186", "#7fbc41", "#4d9221", 
+#                                "#3288bd", "#984ea3", "#ff7f00"))
+
+
+#ggsave("PRS-R2-comparison.png", width=16, height=10, units="in")
+
+
+newfig <- newfig %>% mutate(label3 = case_when(ancestry == "AFR (East)" & cohort == "AADM" ~ "AADM (Kenyan)",
+                                              ancestry == "AFR (West)" & cohort == "AADM" ~ "AADM (Nigerian, Ghanaian)",
+                                              ancestry == "AFR (East)" & cohort == "AWI-Gen-East" ~ "AWI-Gen (Kenyan)",
+                                              ancestry == "AFR (South)" & cohort == "AWI-Gen-South" ~ "AWI-Gen (South African)",
+                                              ancestry == "AFR (West)" & cohort == "AWI-Gen-West" ~ "AWI-Gen (Burkinabe, Ghanaian)",
+                                              ancestry == "SAS" & cohort == "ELGH" ~ "ELGH (British Pakistani and Bangladeshi)",
+                                              ancestry == "EAS" & cohort == "KoGES" ~ "KoGES (Korean)",
+                                              ancestry == "AFRAMR" & cohort == "MGI" ~ "MGI (African American)",
+                                              ancestry == "EUR" & cohort == "MGI" ~ "MGI (European American)",
+                                              ancestry == "AFRAMR" & cohort == "MVP" ~ "MVP (African American)",
+                                              ancestry == "ASN" & cohort == "MVP" ~ "MVP (Asian American)",
+                                              ancestry == "EUR" & cohort == "MVP" ~ "MVP  (European American)",
+                                              ancestry == "HIS" & cohort == "MVP" ~ "MVP (Hispanic American)",
+                                              ancestry == "AFRAMR" & cohort == "PMBB" ~ "PMBB (African American)",
+                                              ancestry == "EAS" & cohort == "ToMMo" ~ "ToMMo (Japanese)",
+                                              ancestry == "Samoan" & cohort == "OLaGA" ~ "OLaGA (Samoan)"))
+
+newfig <- newfig %>% mutate(label4 = factor(label3, levels = newfig$label3[order(newfig$ancestry2)]))
+
+ggplot(newfig, aes(x=label4, y=adj_R2, color=ancestry2)) + 
+  geom_errorbar(aes(ymin=Lower_95_CI, ymax=Upper_95_CI), size=2) +
+  geom_point(size=4) +
+  scale_y_continuous(labels = c(0,0.05,0.10,0.15,0.20), limits = c(0, 0.20)) +
+  ylab(expression(R^2)) + 
+  xlab("") + 
+  theme_bw() + 
+  scale_color_discrete(name = "Ancestry") +
+  coord_flip() + 
+  theme(text=element_text (size=24),
+        legend.position = "none")
+
+ggsave("PRS-R2-comparison_flip.png", width=16, height=10, units="in")
+
+
+
+```
+
+
+# Session Information
+
+```{r}
+sessionInfo()
+```
