@@ -1,0 +1,75 @@
+io:
+  output_root: "outputs"
+
+pgs:
+  weights_file: "inputs/pgs_weights.tsv"
+  weights_columns:
+    chr: "chr_name"
+    pos: "chromEnd.hg38"
+    effect_allele: "effect_allele"
+    other_allele: "other_allele"
+    effect_weight: "effect_weight"
+
+scoring:
+  sample_id_regex: "^SG"
+  chromosomes: [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22]
+  cohorts:
+    discovery:
+      gds_template: "inputs/gds/discovery-samoa-chr{chr}.dose.gds"
+      out_dir: "outputs/scoring/discovery"
+    replication_1990:
+      gds_template: "inputs/gds/replication-samoa-chr{chr}.dose.gds"
+      out_dir: "outputs/scoring/replication_1990"
+    replication_2002:
+      gds_template: "inputs/gds/replication-samoa-chr{chr}.dose.gds"
+      out_dir: "outputs/scoring/replication_2002"
+
+modeling:
+  covariates: ["age", "age2", "sex", "sex_age", "sex_age2", "V1", "V2", "V3"]
+  trait_configs:
+    HDL-C:
+      input_csv: "inputs/modeling/hdl_validation_data.csv"
+      phenotype_col: "phenotype"
+      prs_col: "prs"
+      cohort_col: "cohort_label"
+      log_transform: false
+    LDL-C:
+      input_csv: "inputs/modeling/ldl_validation_data.csv"
+      phenotype_col: "phenotype"
+      prs_col: "prs"
+      cohort_col: "cohort_label"
+      log_transform: false
+    TC:
+      input_csv: "inputs/modeling/tc_validation_data.csv"
+      phenotype_col: "phenotype"
+      prs_col: "prs"
+      cohort_col: "cohort_label"
+      log_transform: false
+    TG:
+      input_csv: "inputs/modeling/tg_validation_data.csv"
+      phenotype_col: "phenotype"
+      prs_col: "prs"
+      cohort_col: "cohort_label"
+      log_transform: true
+  bootstrap:
+    n: 1000
+    seed: 2026
+
+imputation_quality:
+  rsq_paths: ["annotation/info/R2", "annotation/info/Rsq", "annotation/info/RSQ"]
+  cohorts:
+    discovery:
+      scoring_dir: "outputs/scoring/discovery/scoring-files"
+      gds_template: "inputs/gds/discovery-samoa-chr{chr}.dose.gds"
+      label: "WS 2010"
+    replication_1990:
+      scoring_dir: "outputs/scoring/replication_1990/scoring-files"
+      gds_template: "inputs/gds/replication-samoa-chr{chr}.dose.gds"
+      label: "1990"
+    replication_2002:
+      scoring_dir: "outputs/scoring/replication_2002/scoring-files"
+      gds_template: "inputs/gds/replication-samoa-chr{chr}.dose.gds"
+      label: "2002"
+
+tables:
+  variant_summary_glob: "inputs/variant_summary/*.csv"

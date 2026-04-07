@@ -1,0 +1,111 @@
+io:
+  output_dir: "outputs"
+
+forest:
+  input_r2_csv: "inputs/all_r2_results.csv"
+  out_prefix: "Fig1_forest"
+  cohort_label_map:
+    "WS 2010": "2010 Samoa"
+    "1994 AS": "1994 American Samoa"
+    "1995 WS": "1995 Samoa"
+    "2002 AS": "2002 American Samoa"
+    "2003 WS": "2003 Samoa"
+  cohort_levels:
+    - "2010 Samoa"
+    - "1994 American Samoa"
+    - "1995 Samoa"
+    - "2002 American Samoa"
+    - "2003 Samoa"
+  trait_order:
+    - "HDL-C"
+    - "LDL-C"
+    - "TC"
+    - "TG"
+  colors:
+    "2010 Samoa": "#1b7837"
+    "1994 American Samoa": "#b35806"
+    "1995 Samoa": "#542788"
+    "2002 American Samoa": "#c51b7d"
+    "2003 Samoa": "#276419"
+  width_in: 14
+  height_in: 9
+  dpi: 300
+
+supplementary:
+  out_prefix:
+    HDL-C: "FigS1_HDL_scatter_density"
+    LDL-C: "FigS2_LDL_scatter_density"
+    TC: "FigS3_TC_scatter_density"
+    TG: "FigS4_TG_scatter_density"
+  cohort_levels:
+    - "2010 Samoa"
+    - "1994 American Samoa"
+    - "1995 Samoa"
+    - "2002 American Samoa"
+    - "2003 Samoa"
+  colors:
+    "2010 Samoa": "#1b9e77"
+    "1994 American Samoa": "#d95f02"
+    "1995 Samoa": "#7570b3"
+    "2002 American Samoa": "#e7298a"
+    "2003 Samoa": "#66a61e"
+  covariates:
+    - "age"
+    - "age2"
+    - "sex"
+    - "sex_age"
+    - "sex_age2"
+    - "V1"
+    - "V2"
+    - "V3"
+  traits:
+    HDL-C:
+      y_label: "HDL-C"
+      discovery_file: "inputs/hdl_discovery_prs.txt"
+      discovery_pheno_col: "HDL_C2"
+      replication_pheno_col: "HDLCT3"
+      replication_files:
+        "1994 American Samoa": "inputs/hdl_1990_AS_prs.txt"
+        "1995 Samoa": "inputs/hdl_1990_WS_prs.txt"
+        "2002 American Samoa": "inputs/hdl_2002_AS_prs.txt"
+        "2003 Samoa": "inputs/hdl_2002_WS_prs.txt"
+      log_transform: false
+    LDL-C:
+      y_label: "LDL-C"
+      discovery_file: "inputs/ldl_discovery_prs.txt"
+      discovery_pheno_col: "LDL_C2"
+      use_chr_scores: true
+      replication_pheno_col: "LDLCT3"
+      replication_chr_score_dirs:
+        "1994 American Samoa": "inputs/ldl_1990_chr_scores"
+        "1995 Samoa": "inputs/ldl_1990_chr_scores"
+        "2002 American Samoa": "inputs/ldl_2002_chr_scores"
+        "2003 Samoa": "inputs/ldl_2002_chr_scores"
+      replication_covar_files:
+        "1994 American Samoa": "inputs/ldl_1990_AS_prs.txt"
+        "1995 Samoa": "inputs/ldl_1990_WS_prs.txt"
+        "2002 American Samoa": "inputs/ldl_2002_AS_prs.txt"
+        "2003 Samoa": "inputs/ldl_2002_WS_prs.txt"
+      log_transform: false
+    TC:
+      y_label: "TC"
+      discovery_file: "inputs/tc_discovery_prs.txt"
+      discovery_pheno_col: "Cholesterol2"
+      replication_pheno_col: "CHOLT3"
+      replication_files:
+        "1994 American Samoa": "inputs/tc_1990_AS_prs.txt"
+        "1995 Samoa": "inputs/tc_1990_WS_prs.txt"
+        "2002 American Samoa": "inputs/tc_2002_AS_prs.txt"
+        "2003 Samoa": "inputs/tc_2002_WS_prs.txt"
+      log_transform: false
+    TG:
+      y_label: "TG"
+      discovery_file: "inputs/trg_discovery_prs.txt"
+      discovery_pheno_col: "NetTG2"
+      replication_pheno_col: "TRIGLYT3"
+      replication_files:
+        "1994 American Samoa": "inputs/trg_1990_AS_prs.txt"
+        "1995 Samoa": "inputs/trg_1990_WS_prs.txt"
+        "2002 American Samoa": "inputs/trg_2002_AS_prs.txt"
+        "2003 Samoa": "inputs/trg_2002_WS_prs.txt"
+      log_transform: true
