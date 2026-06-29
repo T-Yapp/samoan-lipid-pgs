@@ -1,0 +1,298 @@
+---
+title: "Graham et al 2021 LDL-C PRS Performance in Samoans"
+author: "Toni-Ann Yapp and Jenna C. Carlson"
+date: "`r format(Sys.time(), '%B %d, %Y, %R')`"
+output: 
+ html_document:
+    toc: true
+    number_sections: true
+    code_folding: show
+editor_options: 
+  chunk_output_type: inline
+---
+
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+require(knitr)
+# Set so that long lines in R will be wrapped:
+opts_chunk$set(tidy.opts=list(width.cutoff=80),tidy=TRUE)
+```
+
+
+Goal: assess the performance of the multi-ancestry polygenic risk score for LDL-C constructed in Graham et al 2021 (https://www.nature.com/articles/s41586-021-04064-3) in the Samoan discovery cohort.
+
+PRS weights from: https://www.pgscatalog.org/score/PGS000889/
+
+This PRS was developed using GWAS from ALL ancestries in the analyses (1,088,526 individuals of the following ancestries: African unspecified, East Asian, European, Hispanic or Latin American, South Asian).
+
+It was developed using pruning and thresholding of GWAS results (r2=0.1, distance=500kb, p=5e-4) and contains 9,009 variants in build hg19, weighted by effect estimates (betas).
+
+
+# Load Libraries
+
+```{r load_libraries,message=FALSE}
+library(tidyverse)
+library(SeqArray)
+library(SeqVarTools)
+library(TopmedPipeline)
+library(Biobase) # annotated data frame
+library(rsq)
+library(RNOmni)
+library(readxl)
+
+```
+
+#PGS MADE IN MASTER FILE 
+
+## What percent of PRS variants have MAF = 0 in Samoans?
+
+```{r}
+maf.counts <- data.frame(chr = 1:22,
+                         n.snp = rep(NA, 22),
+                         n.maf0 = rep(0, 22))
+for(i in 1:22){
+  load(paste0("~/PRS/Triglyceride/scoring-files/final.scoring.file.chr", i, ".RData"), verbose=FALSE)
+  maf.counts$n.snp[i] <- nrow(final.scoring.file)
+  maf.counts$n.maf0[i] <- sum(final.scoring.file$maf == 0, na.rm = T) # 2 vars on chr 19 have missing MAF info
+}
+
+sum(maf.counts$n.snp)
+sum(maf.counts$n.maf0)
+sum(maf.counts$n.maf0)/sum(maf.counts$n.snp)
+```
+
+
+# PRS evaluation in Samoans
+
+## Merge in all chromosomes together
+```{r}
+load("~/PRS/Triglyceride/prs-samoan-scores/samoa.prs.chr1.RData")
+names(samoa.scores)[2] <- "score.chr1"
+
+samoa.scores.all <- samoa.scores 
+
+
+for(chr.i in c(2:22)){
+  load(paste0("~/PRS/Triglyceride/prs-samoan-scores/samoa.prs.chr", chr.i, ".RData"))
+  names(samoa.scores)[2] <- paste0("score.chr", chr.i)
+  samoa.scores.all <- left_join(samoa.scores.all, samoa.scores, by = "ID")
+}
+
+dim(samoa.scores.all)
+
+samoa.scores.all$prs <- rowSums(samoa.scores.all[,-1])
+summary(samoa.scores.all$prs)
+sd(samoa.scores.all$prs)
+```
+
+
+
+## Distribution of PRS in Samoans
+```{r}
+#Ignore this -- bwfore we log transformed and normalized 
+#ggplot(data=samoa.scores.all, aes(x=prs)) + 
+#  geom_density() + 
+#  theme_bw()
+
+# Update path to your local phenotype data file
+load("path/to/phenotypes-analysis-discovery.RData")
+
+# log transform TG first!
+tg.obs <- complete.cases(phenotypes$age.tg, phenotypes$sex, phenotypes$tg)
+m.logtg <- lm(I(log(tg)) ~ age.tg + age2.tg + sex + sex_age.tg + sex_age2.tg + PC1 + PC2 + PC3, data = phenotypes[tg.obs,], na.action = na.exclude) 
+phenotypes[tg.obs, "logtg.res"] <- RankNorm(residuals(m.logtg))
+hist(phenotypes$logtg.res)
+```
+
+
+## Association with LDL
+
+
+```{r}
+# Update path to your local phenotype file
+load("path/to/NetTG2-phenotype.RData", verbose=TRUE)
+
+head(pData(annot))
+
+# Update path to your local PC-AiR file
+pca <- get(load("path/to/samoa-hg38_pcair-round2_pcair.RData"))
+
+pcs <- as.data.frame(pca$vectors)
+pcs$sample.id <- row.names(pcs)
+
+tmp.df <- left_join(samoa.scores.all, pData(annot), by = c("ID" = "sample.id"))
+samoa.prs.df <- left_join(tmp.df, pcs[,c("sample.id", "V1", "V2", "V3")], by = c("ID" = "sample.id"))
+
+samoa.prs.df
+
+write.table(samoa.prs.df, 
+            file = "~/PRS/individual_prs/trg_discovery_prs.txt", 
+            row.names = FALSE,
+            quote = FALSE,
+            sep = "\t")
+
+
+```
+
+### Unadjusted model
+```{r}
+ggplot(data = samoa.prs.df, aes(y=log(NetTG2), x=prs)) + 
+  geom_point(alpha=0.3, color="#004D85") + 
+  geom_smooth(color="gray20", se=FALSE) + 
+  theme_classic() +
+  xlab("Polygenic Risk Score") + 
+  ylab("Triglyceride (mg/dL)") +
+  scale_x_continuous(breaks=seq(43,50)) +
+  theme(text=element_text (size=32))
+
+ggsave("PRS-NetTG2_scatterplot.png", width=16, height=10, units="in")
+
+
+m1 <- lm(log(NetTG2) ~ prs, data = samoa.prs.df)
+summary(m1)
+
+```
+###NORMALIZATION 
+```{r}
+samoa.prs.df$PRS_norm <- RankNorm(samoa.prs.df$prs)
+m1.n <- lm(NetTG2 ~ PRS_norm, data = samoa.prs.df)
+summary(m1.n)
+```
+
+
+### Adjust for age, sex, and PCAs
+
+```{r}
+m2 <- lm(log(NetTG2) ~ prs + age + age2 + sex + sex_age + sex_age2 + V1 + V2 + V3, data = samoa.prs.df)
+summary(m2)
+confint(m2)
+
+# p-value for prs
+beta <- summary(m2)$coefficients["prs", "Estimate"]
+beta
+confint(m2)
+tstat <- summary(m2)$coefficients["prs", "t value"]
+2*pt(abs(tstat), df=2849, lower.tail=FALSE)
+
+```
+
+
+### R2 - PRS evaluation metric
+
+```{r}
+rsq.partial(objF = m2)
+
+rsq.partial(objF = m2)$partial.rsq[1]
+
+#rsq.partial(objF = m2.n)
+
+#rsq.partial(objF = m2.n)$partial.rsq[1]
+```
+**The Partial R2 for the PRS in Samoans in 1.2%. ** 
+
+Evaluation of PRS in Graham et al 2021:
+
+"For each individual in the testing cohorts, PRS were calculated as the sum of the dosages multiplied by the given weight at each variant."  
+
+"Model fit was assessed using the adjusted R2 of a linear model for LDL-C value at initial assessment adjusted for cholesterol medication (divided by 0.7 to estimate pre-medication levels) with sex, batch, age at initial assessment and PCs 1–4 as covariates (Supplementary Tables 21–23)."  
+
+"Supplementary Table 23: Prediction of LDL-C in MGI individuals based on varying numbers of PCs included in the model
+The polygenic score was normalized within each ancestry group separately"  
+
+"Adjusted R2 values were reported for each cohort and ancestry group, with 95% confidence intervals for the adjusted R2 values calculated using bootstrapping."  
+
+"The PRS developed from the multi-ancestry meta-analysis consistently showed the best or near-best performance in each group tested, with improved or comparable predictions relative to ancestry-matched scores (adjusted R2=0.10–0.16; Fig. 3, Supplementary Table 17, Extended Data Fig. 7)."  
+
+
+#### Bootstrap CI for R2
+
+```{r}
+set.seed(06082022)
+n.boot <- 1000
+boot.r2 <- rep(NA, times=n.boot)
+
+for(i in 1:n.boot){
+  boot.df <- samoa.prs.df[sample(1:nrow(samoa.prs.df), nrow(samoa.prs.df), replace=TRUE),]
+  boot.m2 <- lm(log(NetTG2) ~ prs + age + age2 + sex + sex_age + sex_age2 + V1 + V2 + V3, data = boot.df)
+  boot.r2[i] <- rsq.partial(objF = boot.m2)$partial.rsq[1]
+}
+
+hist(boot.r2)
+quantile(boot.r2, c(0.025, 0.5, 0.975)) # 95% bootstrap CI for R2
+
+
+
+```
+
+### Incremental R² - Additional variance explained by PRS
+
+```{r}
+# Model with covariates only (no PRS)
+m2.base <- lm(log(NetTG2) ~ age + age2 + sex + sex_age + sex_age2 + V1 + V2 + V3, 
+              data = samoa.prs.df)
+
+# Model with PRS and covariates (already created above as m2)
+# m2 <- lm(log(NetTG2) ~ prs + age + age2 + sex + sex_age + sex_age2 + V1 + V2 + V3, 
+#          data = samoa.prs.df)
+
+# Calculate R² for both models
+r2.base <- summary(m2.base)$r.squared
+r2.full <- summary(m2)$r.squared
+
+# Incremental R² (additional variance explained by PRS)
+incremental.r2 <- r2.full - r2.base
+
+cat("R² (covariates only):", round(r2.base, 4), "\n")
+cat("R² (PRS + covariates):", round(r2.full, 4), "\n")
+cat("Incremental R² (PRS contribution):", round(incremental.r2, 4), "\n")
+cat("Percentage of additional variance explained by PRS:", 
+    round(incremental.r2 * 100, 2), "%\n")
+
+# Likelihood ratio test to assess significance of PRS contribution
+lrt <- anova(m2.base, m2, test = "F")
+print(lrt)
+
+```
+
+#### Bootstrap CI for Incremental R²
+
+```{r}
+set.seed(06082022)
+n.boot <- 1000
+boot.incremental.r2 <- rep(NA, times = n.boot)
+
+for(i in 1:n.boot){
+  boot.df <- samoa.prs.df[sample(1:nrow(samoa.prs.df), nrow(samoa.prs.df), replace = TRUE),]
+  
+  # Base model (covariates only)
+  boot.m2.base <- lm(log(NetTG2) ~ age + age2 + sex + sex_age + sex_age2 + V1 + V2 + V3, 
+                     data = boot.df)
+  
+  # Full model (PRS + covariates)
+  boot.m2.full <- lm(log(NetTG2) ~ prs + age + age2 + sex + sex_age + sex_age2 + V1 + V2 + V3, 
+                     data = boot.df)
+  
+  # Calculate incremental R²
+  boot.incremental.r2[i] <- summary(boot.m2.full)$r.squared - summary(boot.m2.base)$r.squared
+}
+
+hist(boot.incremental.r2, 
+     main = "Bootstrap Distribution of Incremental R²",
+     xlab = "Incremental R²",
+     col = "#004D85")
+
+# 95% bootstrap CI for incremental R²
+boot.ci <- quantile(boot.incremental.r2, c(0.025, 0.975))
+cat("\n95% Bootstrap CI for Incremental R²:\n")
+cat("Lower bound:", round(boot.ci[1], 4), "\n")
+cat("Upper bound:", round(boot.ci[2], 4), "\n")
+
+```
+
+
+
+# Session Information
+
+```{r}
+sessionInfo()
+```

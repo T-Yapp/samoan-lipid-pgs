@@ -1,0 +1,43 @@
+# Participant data - never commit
+*.RData
+*.rda
+*.rds
+
+# Genotype dosage files
+dosages/
+*/dosages/
+
+# Individual PRS score files
+prs-samoan-scores/
+*/prs-samoan-scores/
+
+# Scoring and harmonization intermediate files
+scoring-files/
+*/scoring-files/
+
+# Phenotype and covariate data
+*phenotype*
+*-phenotype*
+
+# PLINK binary files (contain genotypes)
+*.bed
+*.bim
+*.fam
+*.frq
+*.frqx
+
+# Large external GWAS weight files (available from PGS Catalog)
+AE.xlsx
+
+# R session / environment files
+.Rhistory
+.RData
+.Rproj.user/
+
+# Log files
+*.log
+logs*/
+
+# OS noise
+.DS_Store
+Thumbs.db
