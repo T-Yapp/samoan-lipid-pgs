@@ -105,7 +105,7 @@ BiocManager::install(c("SeqArray", "SeqVarTools"))
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/tajyxx/samoan-lipid-pgs.git
+git clone https://github.com/T-Yapp/samoan-lipid-pgs.git
 cd samoan-lipid-pgs/github_sanitized/pgs_validation_pipeline
 
 # 2. Copy and edit the configuration file
