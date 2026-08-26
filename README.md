@@ -4,7 +4,7 @@
 
 Department of Human Genetics, University of Pittsburgh — and collaborating institutions
 
-> **Manuscript:** "Evaluating Polygenic Score Transferability for Lipid Traits in Underrepresented Populations: Evidence from Samoan Cohorts" *(under review)*
+> **Manuscript:** "Variant Harmonization Critically Determines Polygenic Score Transferability for Lipid Traits in Samoan Populations" *(HGG Advances)*
 > Correspondence: tjy19@pitt.edu
 
 ---
@@ -147,7 +147,7 @@ Genotype and phenotype data cannot be distributed directly due to participant pr
 
 ## Citation
 
-> Yapp TJ, Krishnan M, Liu S, Manna SL, Cheng H, Naseri T, Reupena MS, Viali S, Tuitele J, Deka R, Hawley NL, McGarvey ST, Weeks DE, Minster RL, Carlson JC. Evaluating Polygenic Score Transferability for Lipid Traits in Underrepresented Populations: Evidence from Samoan Cohorts. *(under review)*
+> Yapp T-AJ, Krishnan M, Liu S, Manna SL, Cheng H, Naseri T, Reupena MS, Viali S, Tuitele J, Deka R, Hawley NL, McGarvey ST, Weeks DE, Minster RL, Carlson JC, Variant Harmonization Critically Determines Polygenic Score Transferability for Lipid Traits in Samoan Populations, Human Genetics and Genomics Advances (2026), doi: https://doi.org/10.1016/ j.xhgg.2026.100663.
 
 ---
 
